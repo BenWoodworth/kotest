@@ -2,6 +2,7 @@ package io.kotest.property
 
 import io.kotest.property.arbitrary.lazy
 import io.kotest.property.exhaustive.lazy
+import io.kotest.property.seed.createRandom
 import kotlin.reflect.KProperty
 
 /**
@@ -36,11 +37,33 @@ suspend fun testProperty(
    config: PropTestConfig = PropTestConfig(),
    property: suspend PropertyTestScope.() -> Unit
 ) {
-   TODO()
+   val scope = PropertyTestScope(createRandom(config), config.edgeConfig)
+
+   repeat(config.iterations ?: PropertyTesting.defaultIterationCount) {
+      scope.startTestIteration()
+      scope.property()
+   }
 }
 
-class PropertyTestScope {
+class PropertyTestScope(
+   private val randomSource: RandomSource,
+   private val edgeConfig: EdgeConfig
+) {
+   private val generatorVariables = hashMapOf<KProperty<*>, Iterator<Sample<*>>>()
+
+   private val generatorVariableValues = hashMapOf<KProperty<*>, Sample<*>>()
+
    operator fun <A> Gen<A>.getValue(thisRef: Nothing?, variable: KProperty<*>): A {
-      TODO()
+      val generator = generatorVariables
+         .getOrPut(variable) { generate(randomSource, edgeConfig).iterator() }
+
+      @Suppress("UNCHECKED_CAST")
+      return generatorVariableValues
+         .getOrPut(variable) { generator.next() }
+         .value as A
+   }
+
+   fun startTestIteration() {
+      generatorVariableValues.clear()
    }
 }
