@@ -39,7 +39,15 @@ suspend fun testProperty(
 ) {
    val scope = PropertyTestScope(createRandom(config), config.edgeConfig)
 
-   repeat(config.iterations ?: PropertyTesting.defaultIterationCount) {
+   fun getIterations(): Int {
+      val hasOnlyExhaustive = scope.hasExhaustiveVariables && !scope.hasArbVariables
+      val defaultIterations = if (hasOnlyExhaustive) 0 else PropertyTesting.defaultIterationCount
+
+      return maxOf(scope.minIterations, defaultIterations)
+   }
+
+   var iteration = 0
+   while (iteration++ < getIterations()) {
       scope.startTestIteration()
       scope.property()
    }
@@ -49,21 +57,84 @@ class PropertyTestScope(
    private val randomSource: RandomSource,
    private val edgeConfig: EdgeConfig
 ) {
-   private val generatorVariables = hashMapOf<KProperty<*>, Iterator<Sample<*>>>()
+   private var iteration = 0
 
-   private val generatorVariableValues = hashMapOf<KProperty<*>, Sample<*>>()
+   private val variableGenerators = hashMapOf<KProperty<*>, Gen<*>>()
+   private val arbVariables = ArbVariableContainer()
+   private val exhaustiveVariables = ExhaustiveVariableContainer()
+
+   val minIterations: Int
+      get() = exhaustiveVariables.permutations
+
+   val hasArbVariables: Boolean
+      get() = arbVariables.count > 0
+
+   val hasExhaustiveVariables: Boolean
+      get() = exhaustiveVariables.count > 0
 
    operator fun <A> Gen<A>.getValue(thisRef: Nothing?, variable: KProperty<*>): A {
-      val generator = generatorVariables
-         .getOrPut(variable) { generate(randomSource, edgeConfig).iterator() }
-
       @Suppress("UNCHECKED_CAST")
-      return generatorVariableValues
-         .getOrPut(variable) { generator.next() }
-         .value as A
+      val generator = variableGenerators
+         .getOrPut(variable) { this } as Gen<A>
+
+      return when (generator) {
+         is Arb -> arbVariables.getValue(variable, generator)
+         is Exhaustive -> exhaustiveVariables.getValue(variable, generator, iteration)
+      }
    }
 
    fun startTestIteration() {
-      generatorVariableValues.clear()
+      arbVariables.clearValues()
+      iteration++
+   }
+
+   private inner class ArbVariableContainer {
+      private val samples = hashMapOf<KProperty<*>, Iterator<Sample<*>>>()
+      private val values = hashMapOf<KProperty<*>, Sample<*>>()
+
+      val count: Int
+         get() = samples.size
+
+      fun clearValues() {
+         values.clear()
+      }
+
+      fun <A> getValue(variable: KProperty<*>, arbitrary: Arb<A>): A {
+         val samples = samples.getOrPut(variable) {
+            arbitrary.generate(randomSource, edgeConfig).iterator()
+         }
+
+         @Suppress("UNCHECKED_CAST")
+         return values
+            .getOrPut(variable) { samples.next() }
+            .value as A
+      }
+   }
+
+   private class ExhaustiveVariableContainer {
+      var permutations: Int = 1
+         private set
+
+      class State<A>(val values: List<A>, val samplePeriod: Int)
+
+      private val variableStates = hashMapOf<KProperty<*>, State<*>>()
+
+      val count: Int
+         get() = variableStates.size
+
+      fun <A> getValue(variable: KProperty<*>, exhaustive: Exhaustive<A>, iteration: Int): A {
+         val state = variableStates.getOrPut(variable) {
+            val values = exhaustive.values.toList()
+            val samplePeriod = permutations
+            permutations *= values.size
+
+            State(values, samplePeriod)
+         }
+
+         val valueIndex = iteration / state.samplePeriod % state.values.size
+
+         @Suppress("UNCHECKED_CAST")
+         return state.values[valueIndex] as A
+      }
    }
 }

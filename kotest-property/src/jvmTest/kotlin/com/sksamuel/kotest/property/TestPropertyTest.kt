@@ -2,12 +2,16 @@ package com.sksamuel.kotest.property
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContainOnly
 import io.kotest.matchers.shouldBe
 import io.kotest.property.Arb
+import io.kotest.property.Exhaustive
 import io.kotest.property.PropertyTesting
 import io.kotest.property.arbitrary.arbitrary
 import io.kotest.property.arbitrary.int
 import io.kotest.property.arbitrary.map
+import io.kotest.property.exhaustive.exhaustive
+import io.kotest.property.exhaustive.ints
 import io.kotest.property.testProperty
 
 // Tests for `testProperty()` without any configuration
@@ -20,6 +24,7 @@ class TestPropertyTest : FunSpec({
 
       suspend fun countIterations(
          arbitrary: Boolean = false,
+         exhaustive: Int? = null,
       ): Int {
          var iterations = 0
 
@@ -29,6 +34,11 @@ class TestPropertyTest : FunSpec({
             if (arbitrary) {
                val arbVariable by Arb.int()
                readVariable(arbVariable)
+            }
+
+            if (exhaustive != null) {
+               val exhaustiveVariable by Exhaustive.ints(1..exhaustive)
+               readVariable(exhaustiveVariable)
             }
          }
 
@@ -41,6 +51,33 @@ class TestPropertyTest : FunSpec({
 
       test("with only arbitrary variables, should use the default") {
          countIterations(arbitrary = true) shouldBe default
+      }
+
+      test("with only exhaustive variables, should use the number of permutations") {
+         val lessPermutations = default / 2
+         val morePermutations = default * 2
+
+         // permutations < default
+         countIterations(exhaustive = lessPermutations) shouldBe lessPermutations
+
+         // default < permutations
+         countIterations(exhaustive = morePermutations) shouldBe morePermutations
+      }
+
+      context("with both arbitrary and exhaustive variables") {
+         test("and exhaustive permutations < default, should use the default") {
+            val permutations = default / 2
+
+            // permutations < default
+            countIterations(arbitrary = true, exhaustive = permutations) shouldBe default
+         }
+
+         test("and exhaustive permutations > default, should use the number of permutations") {
+            val permutations = default * 2
+
+            // default < permutations
+            countIterations(arbitrary = true, exhaustive = permutations) shouldBe permutations
+         }
       }
    }
 
@@ -225,6 +262,77 @@ class TestPropertyTest : FunSpec({
          }
 
          failures.shouldBeEmpty()
+      }
+   }
+
+   context("exhaustive variables") {
+      test("should sample every value") {
+         val integersLessThan100 = 0..99
+
+         val sampledValues = mutableSetOf<Int>()
+
+         testProperty {
+            val variable by exhaustive(integersLessThan100.toList())
+
+            sampledValues += variable
+         }
+
+         sampledValues shouldContainOnly integersLessThan100
+      }
+
+      test("should sample every permutation of multiple values") {
+         val numbers = "0123456789".toList()
+         val letters = "ABCDEF".toList()
+         val symbols = "!@#$%".toList()
+
+         val sampledValues = mutableSetOf<String>()
+
+         testProperty {
+            val number by exhaustive(numbers)
+            val letter by exhaustive(letters)
+            val symbol by exhaustive(symbols)
+
+            sampledValues += "$number$letter$symbol"
+         }
+
+         val everyPermutation = buildSet {
+            for (number in numbers) {
+               for (letter in letters) {
+                  for (symbol in symbols) {
+                     add("$number$letter$symbol")
+                  }
+               }
+            }
+         }
+
+         sampledValues shouldContainOnly everyPermutation
+      }
+
+      test("should only sample from the originally provided values") {
+         class ChangingExhaustive<A>(
+            override val values: MutableList<A>
+         ) : Exhaustive<A>()
+
+         val originalValues = listOf("a", "b", "c")
+
+         val changingExhaustive = ChangingExhaustive(originalValues.toMutableList())
+         var valuesChanged = false
+
+         val sampledValues = mutableSetOf<String>()
+
+         testProperty {
+            val value by changingExhaustive
+
+            sampledValues += value
+
+            if (!valuesChanged) {
+               changingExhaustive.values.removeLast()
+               changingExhaustive.values.add("<Swapped Value>")
+               valuesChanged = true
+            }
+         }
+
+         sampledValues shouldContainOnly originalValues
       }
    }
 })
