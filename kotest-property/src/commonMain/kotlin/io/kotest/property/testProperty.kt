@@ -37,7 +37,7 @@ suspend fun testProperty(
    config: PropTestConfig = PropTestConfig(),
    property: suspend PropertyTestScope.() -> Unit
 ) {
-   val scope = PropertyTestScope(createRandom(config), config.edgeConfig)
+   val scope = TestingPropertyTestScope(createRandom(config), config.edgeConfig)
 
    fun getIterations(): Int {
       val hasOnlyExhaustive = scope.hasExhaustiveVariables && !scope.hasArbVariables
@@ -53,10 +53,14 @@ suspend fun testProperty(
    }
 }
 
-class PropertyTestScope(
+sealed interface PropertyTestScope {
+   operator fun <A> Gen<A>.getValue(thisRef: Nothing?, variable: KProperty<*>): A
+}
+
+private class TestingPropertyTestScope(
    private val randomSource: RandomSource,
    private val edgeConfig: EdgeConfig
-) {
+) : PropertyTestScope {
    private var iteration = 0
 
    private val variableGenerators = hashMapOf<KProperty<*>, Gen<*>>()
@@ -72,7 +76,7 @@ class PropertyTestScope(
    val hasExhaustiveVariables: Boolean
       get() = exhaustiveVariables.count > 0
 
-   operator fun <A> Gen<A>.getValue(thisRef: Nothing?, variable: KProperty<*>): A {
+   override operator fun <A> Gen<A>.getValue(thisRef: Nothing?, variable: KProperty<*>): A {
       @Suppress("UNCHECKED_CAST")
       val generator = variableGenerators
          .getOrPut(variable) { this } as Gen<A>
